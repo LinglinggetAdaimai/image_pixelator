@@ -1,0 +1,1 @@
+/Users/lingling/Documents/image_pixelator/pixelate/target/release/pixelate: /Users/lingling/Documents/image_pixelator/pixelate/src/main.rs /Users/lingling/Documents/image_pixelator/pixelate/src/normal.rs /Users/lingling/Documents/image_pixelator/pixelate/src/parallel_pixelate.rs
