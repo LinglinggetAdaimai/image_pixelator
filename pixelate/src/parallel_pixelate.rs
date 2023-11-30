@@ -22,8 +22,8 @@ type Image = ImageBuffer<Rgba<u8>, Vec<u8>>;
 
 fn resize (img: &DynamicImage, n :u32) {
 
-    let ori_image:Image = img.to_rgba8();
-
+    let mut ori_image:Image = img.to_rgba8();
+    
     let old_dimension = Dimension {
         width: ori_image.width(),
         height: ori_image.height()
@@ -37,22 +37,27 @@ fn resize (img: &DynamicImage, n :u32) {
     let ratio_w :f32 = old_dimension.width  as f32 / (old_dimension.width/n) as f32;
     let ratio_h :f32 = old_dimension.height  as f32 / (old_dimension.height/n)  as f32;
     
-    println!("ori dimension: {}, {}", old_dimension.width, old_dimension.height);
-    println!("new dimension: {}, {}", new_dimension.width, new_dimension.height);
+    // println!("ori dimension: {}, {}", old_dimension.width, old_dimension.height);
+    // println!("new dimension: {}, {}", new_dimension.width, new_dimension.height);
+    // println!("ratio_w: {}, ratio_h: {}", ratio_w, ratio_h);
     
     // println!("ratio_w: {}, ratio_h: {}", ratio_w, ratio_h);
     // let mut res_image: Image = ImageBuffer::new(old_dimension.width, old_dimension.height);
     let mut res_image: Image = ImageBuffer::new(new_dimension.width, new_dimension.height);
+    // println!("res_image len: {}", res_image.len());
     
-    // group of pixel [n*m]
+    // group of pixel [292,2,29,22] for (n*n) pixels 
     let result_pixels = res_image.par_chunks_exact_mut(4 as usize);
-    // let result_pixels = res_image.par_chunks_exact_mut(4*new_dimension.height as usize);
-    println!("result_pixels: {}", result_pixels.len());
     
+    // x: 1079, y: 1919 size: 1080, 1920
     result_pixels.enumerate()
-        .for_each(|(index, new_pixels)| {
-            let x = index / new_dimension.width as usize;
-            let y = index % new_dimension.width as usize;
+
+    // break in half and then call the helper function to put the pixel in
+        .for_each(|(index, pixel)| {
+            let y = index / new_dimension.width as usize;
+            let x = index % new_dimension.width as usize;
+
+            // println!("x: {}, y: {}", x, y);
             let ori_x = (x as f32 * ratio_w) as u32;
             let ori_y = (y as f32 * ratio_h) as u32;
 
@@ -60,20 +65,34 @@ fn resize (img: &DynamicImage, n :u32) {
 
             let old_pixels = ori_image.get_pixel(ori_x, ori_y).channels();
 
-            new_pixels.par_iter_mut().zip(old_pixels)
-                .enumerate()
-                .for_each(|(index, (new_pix, &old_pix))| {
-                // println!("index: {}", index);
-                // println!("new_pix: {}", new_pix);
-                // println!("old_pix: {}", old_pix);
+            pixel.par_iter_mut().zip(old_pixels).for_each(|(new_pix, &old_pix)| {
                 *new_pix = old_pix;
-
-                println!("new_pix after: {}", new_pix);
-                });
+            });
         });
+    
+    let upscaling_pixels = ori_image.par_chunks_exact_mut(4 as usize);
+
+    upscaling_pixels.enumerate()
+        .for_each(|(index, pixel)| {
+            let y = index / old_dimension.width as usize;
+            let x = index % old_dimension.width as usize;
+
+            // println!("x: {}, y: {}", x, y);
+            let ori_x = (x as f32 / ratio_w) as u32;
+            let ori_y = (y as f32 / ratio_h) as u32;
+
+            // print!("x: {}, y: {}, ori_x: {}, ori_y: {}", x, y, ori_x, ori_y);
+
+            let old_pixels = res_image.get_pixel(ori_x, ori_y).channels();
+
+            pixel.par_iter_mut().zip(old_pixels).for_each(|(new_pix, &old_pix)| {
+                *new_pix = old_pix;
+            });
+        });
+
         
     let pixelate_format = format!("images/par_pixelated_{}.png", n);
-    let  _ = res_image.save(pixelate_format);
+    let  _ = ori_image.save(pixelate_format);
 
 
     // go through new image by row
@@ -97,30 +116,6 @@ fn resize (img: &DynamicImage, n :u32) {
 
 }
 
-// fn test_resize(img: DynamicImage, n: u32) {
-//     // can we loop through the image, then get the pixel and then aplly to every pixel in the image
-//     let mut ori_image:Image = img.to_rgba8();
-
-//     let mut pixelated:Image = ImageBuffer::new(ori_image.width(), ori_image.height());
-
-//     // pixelated.par_chunks_exact_mut((n * 4) as usize).for_each(|x| {
-//     //     x.chunks_exact_mut(4).for_each(|y| {
-//     //         y[0] = 255;
-//     //         y[1] = 0;
-//     //         y[2] = 0;
-//     //         y[3] = 255;
-//     //     })
-//     // });
-//     let _ = pixelated.par_chunks_exact_mut(4).zip(ori_image.into_par_iter().skip(n as usize).chunks(4))
-//         .into_par_iter().for_each(|(res_pix, ori_pix)| {
-//         res_pix[0] = *ori_pix[0];
-//         res_pix[1] = *ori_pix[1];
-//         res_pix[2] = *ori_pix[2];
-//         // res_pix[3] = *ori_pix[3];
-//     });
-
-    // pixelated
-// }
 
 pub fn par_pixelate(filename: &String, n: u32) -> Result<(), Box<dyn std::error::Error>> {
 

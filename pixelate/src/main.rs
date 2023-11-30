@@ -9,6 +9,13 @@ use std::env;
 use std::time::{Instant, Duration};
 
 
+fn timed<R, F>(f: F) -> (R, Duration) where F: Fn() -> R {
+    let starting_point = Instant::now();
+    let res = f();
+    (res, starting_point.elapsed())
+}
+
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // if have time I wanna make it run with bash script 
     // > pixelate <filename>
@@ -23,19 +30,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let file_name = &args[1]; // The second argument is the file name
     let n = args[2].parse::<u32>().unwrap()  ;
 
-    let n10 = 10;
-    let n50 = 50;
-    let n2 = 2;
+    let start = Instant::now();
+    normal::norm_pixelate(&file_name, n).unwrap();
+    let duration = start.elapsed();
+    println!("Normal running time: {:?}", duration);
 
-    // let start = Instant::now();
-    // normal::norm_pixelate(&file_name, n).unwrap();
-    // let duration = start.elapsed();
-    // println!("Normal running time: {:?}", duration);
-
-    // let start = Instant::now();
+    let start = Instant::now();
     parallel_pixelate::par_pixelate(&file_name, n).unwrap();
-    // let duration = start.elapsed();
-    // println!("Parallel running time: {:?}", duration);
+    let duration = start.elapsed();
+    println!("Parallel running time: {:?}", duration);
 
 
     // let normal_running_time_n10 = timeit(&|| {normal::norm_pixelate(&file_name, n10).unwrap();});
