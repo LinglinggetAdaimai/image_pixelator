@@ -1,10 +1,13 @@
 use image::io::Reader as ImageReader; // image reader that can read from a file
-use image::{GenericImageView, DynamicImage, ImageBuffer, Rgba, RgbImage, GenericImage, Pixel};
+use image::{GenericImageView, DynamicImage, ImageBuffer, Rgba, RgbImage, GenericImage, Pixel, SubImage};
 use rayon::iter::{IntoParallelIterator, ParallelIterator, IndexedParallelIterator, self};
 use rayon::slice::{ParallelSlice, ParallelSliceMut}; 
 use std::env;
+use std::os::macos::raw::stat;
 use rayon::iter::*;
 use std::time::{Instant, Duration};
+
+const IMAGE_THRES: usize = 1024*16;
 
 fn timeit (f: &dyn Fn()) -> Duration {
     let start = Instant::now();
@@ -13,120 +16,245 @@ fn timeit (f: &dyn Fn()) -> Duration {
     end.duration_since(start)
 }
 
-struct Dimension {
-    width: u32,
-    height: u32
-}
-
 type Image = ImageBuffer<Rgba<u8>, Vec<u8>>;
 
-fn resize (img: &DynamicImage, n :u32) {
+// recursion + sequencially downscaling
+fn downscaling(ori_img: &Image, sub_img: &mut [&mut [u8]] , new_w: u32, ratio_w: f32, ratio_h: f32, start:usize) {
+    let len = sub_img.len();
 
-    let mut ori_image:Image = img.to_rgba8();
-    
-    let old_dimension = Dimension {
-        width: ori_image.width(),
-        height: ori_image.height()
-    };
+    if len <= IMAGE_THRES {
+        sub_img.into_iter().enumerate()
+            .for_each(|(index, pixel)| {
+            let y = (index+start) / new_w as usize;
+            let x = (index+start) % new_w as usize;
 
-    let new_dimension: Dimension = Dimension {
-        width: (old_dimension.width/n as u32), 
-        height: (old_dimension.height/n as u32)
-    };
-    
-    let ratio_w :f32 = old_dimension.width  as f32 / (old_dimension.width/n) as f32;
-    let ratio_h :f32 = old_dimension.height  as f32 / (old_dimension.height/n)  as f32;
-    
-    // println!("ori dimension: {}, {}", old_dimension.width, old_dimension.height);
-    // println!("new dimension: {}, {}", new_dimension.width, new_dimension.height);
-    // println!("ratio_w: {}, ratio_h: {}", ratio_w, ratio_h);
-    
-    // println!("ratio_w: {}, ratio_h: {}", ratio_w, ratio_h);
-    // let mut res_image: Image = ImageBuffer::new(old_dimension.width, old_dimension.height);
-    let mut res_image: Image = ImageBuffer::new(new_dimension.width, new_dimension.height);
-    // println!("res_image len: {}", res_image.len());
-    
-    // group of pixel [292,2,29,22] for (n*n) pixels 
-    let result_pixels = res_image.par_chunks_exact_mut(4 as usize);
-    
-    // x: 1079, y: 1919 size: 1080, 1920
-    result_pixels.enumerate()
-
-    // break in half and then call the helper function to put the pixel in
-        .for_each(|(index, pixel)| {
-            let y = index / new_dimension.width as usize;
-            let x = index % new_dimension.width as usize;
-
-            // println!("x: {}, y: {}", x, y);
             let ori_x = (x as f32 * ratio_w) as u32;
             let ori_y = (y as f32 * ratio_h) as u32;
 
-            // print!("x: {}, y: {}, ori_x: {}, ori_y: {}", x, y, ori_x, ori_y);
+            let old_pixels = ori_img.get_pixel(ori_x, ori_y).channels();
 
-            let old_pixels = ori_image.get_pixel(ori_x, ori_y).channels();
-
-            pixel.par_iter_mut().zip(old_pixels).for_each(|(new_pix, &old_pix)| {
+            pixel.iter_mut().zip(old_pixels).for_each(|(new_pix, &old_pix)| {
                 *new_pix = old_pix;
             });
         });
+    }
     
-    let upscaling_pixels = ori_image.par_chunks_exact_mut(4 as usize);
+    else {
+        let mid = len/2;
+        let (left, right) = sub_img.split_at_mut(mid);
+        rayon::join(|| downscaling(ori_img,left, new_w, ratio_w, ratio_h,start),
+                    || downscaling(ori_img, right, new_w, ratio_w, ratio_h,start+mid));
+    }
+    
+}
+fn upscaling(ori_img: &Image, sub_img: &mut [&mut [u8]] , width: u32, ratio_w: f32, ratio_h: f32, start:usize) {
+    let len = sub_img.len();
 
-    upscaling_pixels.enumerate()
-        .for_each(|(index, pixel)| {
-            let y = index / old_dimension.width as usize;
-            let x = index % old_dimension.width as usize;
+    if len <= IMAGE_THRES {
+        sub_img.into_iter().enumerate()
+            .for_each(|(index, pixel)| {
+            let y = (index+start) / width as usize;
+            let x = (index+start) % width as usize;
 
-            // println!("x: {}, y: {}", x, y);
             let ori_x = (x as f32 / ratio_w) as u32;
             let ori_y = (y as f32 / ratio_h) as u32;
 
-            // print!("x: {}, y: {}, ori_x: {}, ori_y: {}", x, y, ori_x, ori_y);
+            let old_pixels = ori_img.get_pixel(ori_x, ori_y).channels();
 
-            let old_pixels = res_image.get_pixel(ori_x, ori_y).channels();
-
-            pixel.par_iter_mut().zip(old_pixels).for_each(|(new_pix, &old_pix)| {
+            pixel.iter_mut().zip(old_pixels).for_each(|(new_pix, &old_pix)| {
                 *new_pix = old_pix;
             });
         });
+    }
 
-        
-    let pixelate_format = format!("images/par_pixelated_{}.png", n);
+    else {
+        let mid = len/2;
+        let (left, right) = sub_img.split_at_mut(mid);
+        rayon::join(|| upscaling(ori_img,left, width, ratio_w, ratio_h, start),
+                    || upscaling(ori_img, right, width, ratio_w, ratio_h,start+mid));
+    }
+    
+}
+fn pixelate_down(ori_img: &Image, sub_img: &mut [&mut [u8]] , width: u32, ratio_w: f32, ratio_h: f32, start:usize) {
+    sub_img.into_iter().enumerate()
+        .for_each(|(index, pixel)| {
+        let y = (index+start) / width as usize;
+        let x = (index+start) % width as usize;
+
+        let ori_x = (x as f32 * ratio_w) as u32;
+        let ori_y = (y as f32 * ratio_h) as u32;
+
+        let old_pixels = ori_img.get_pixel(ori_x, ori_y).channels();
+
+        pixel.iter_mut().zip(old_pixels).for_each(|(new_pix, &old_pix)| {
+            *new_pix = old_pix;
+        });
+    });
+}
+fn pixelate_up (ori_img: &Image, sub_img: &mut [&mut [u8]] , width: u32, ratio_w: f32, ratio_h: f32, start:usize) {
+
+    sub_img.into_iter().enumerate()
+        .for_each(|(index, pixel)| {
+        let y = (index+start) / width as usize;
+        let x = (index+start) % width as usize;
+
+        let ori_x = (x as f32 / ratio_w) as u32;
+        let ori_y = (y as f32 / ratio_h) as u32;
+
+        let old_pixels = ori_img.get_pixel(ori_x, ori_y).channels();
+
+        pixel.iter_mut().zip(old_pixels).for_each(|(new_pix, &old_pix)| {
+            *new_pix = old_pix;
+        });
+    });
+}
+// recursion
+fn resize2 (img: &DynamicImage, n :u32) {
+
+    let mut ori_image:Image = img.to_rgba8();
+
+    let old_width =  ori_image.width();
+    let old_height = ori_image.height();
+
+    let new_width = old_width/ n;
+    let new_height = old_height/ n;
+
+    let ratio_w :f32 = old_width  as f32 / (old_width/n) as f32;
+    let ratio_h :f32 = old_height  as f32 / (old_height/n)  as f32;
+
+    let mut res_image: Image = ImageBuffer::new(new_width, new_height);
+
+    let mut result_pixels: Vec<_> = res_image.par_chunks_exact_mut(4 as usize).collect();
+
+    let mid = result_pixels.len()/2;
+
+    let (l,r) = result_pixels.split_at_mut(mid);
+
+    rayon::join(|| downscaling(&ori_image,l, new_width, ratio_w, ratio_h,0),
+                 || downscaling(&ori_image, r, new_width, ratio_w, ratio_h,mid));
+
+    let mut upscaling_pixels: Vec<_> = ori_image.par_chunks_exact_mut(4 as usize).collect();
+
+    let (l,r) = upscaling_pixels.split_at_mut(mid);
+
+    rayon::join(|| upscaling(&res_image,l, old_width, ratio_w, ratio_h, 0),
+                 || upscaling(&res_image, r, old_width, ratio_w, ratio_h, mid));
+
+    let pixelate_format = format!("images/par_pixelated2new_{}.png", n);
     let  _ = ori_image.save(pixelate_format);
 
 
-    // go through new image by row
-    // for each pixel in the row, find the corresponding pixel in the old image
-    // by also going through the ori image row by ratio
+}
+fn resize3 (img: &DynamicImage, n :u32) {
+
+    let mut ori_image:Image = img.to_rgba8();
+
+    let old_width =  ori_image.width();
+    let old_height = ori_image.height();
+
+    let new_width = old_width/ n;
+    let new_height = old_height/ n;
+
+    let ratio_w :f32 = old_width  as f32 / (old_width/n) as f32;
+    let ratio_h :f32 = old_height  as f32 / (old_height/n)  as f32;
+
+    let mut res_image: Image = ImageBuffer::new(new_width, new_height);
+
+    let mut result_pixels: Vec<_> = res_image.par_chunks_exact_mut(4 as usize).collect();
+
+    let mid = result_pixels.len()/2;
+
+    let (l,r) = result_pixels.split_at_mut(mid);
+
+    rayon::join(|| pixelate_down(&ori_image, l, new_width, ratio_w, ratio_h,0),
+                 || pixelate_down(&ori_image, r, new_width, ratio_w, ratio_h,mid));
+
+    let mut upscaling_pixels: Vec<_> = ori_image.par_chunks_exact_mut(4 as usize).collect();
+
+
+    let (l,r) = upscaling_pixels.split_at_mut(mid);
+
+    rayon::join(|| pixelate_up(&res_image,l, old_width, ratio_w, ratio_h, 0),
+                 || pixelate_up(&res_image, r, old_width, ratio_w, ratio_h, mid));
     
-    // /**
-    //  * new idea, pariter -> Enumerate, like L19 through the new img with the old img dimension and then adjust the ratio
-    // */
 
-    // as an array of pixels
-    // x = i/width
-    // y = i%width
+    let pixelate_format = format!("images/par_pixelated3new_{}.png", n);
+    let  _ = ori_image.save(pixelate_format);
+}
+//not done, wanna do 
+    // create a new picture with the old dimensiuon and then concurrently change it no need to downscaling
 
-    // let start = Instant::now();
-    // let built_in_groups = ori_image.par_chunks(4*old_dimension.width as usize).count();
-    // let done: Instant = Instant::now();
-    // println!("time built_in_groups: {:?}", done.duration_since(start));
-    // println!("built_in_groups: {}", built_in_groups);
+// pixelate by half par - seq
+fn resize4 (img: &DynamicImage, n :u32) {
 
+    let mut ori_image:Image = img.to_rgba8();
+
+    let old_width =  ori_image.width();
+    let old_height = ori_image.height();
+
+    let new_width = old_width/ n;
+    let new_height = old_height/ n;
+
+    let ratio_w :f32 = old_width  as f32 / (old_width/n) as f32;
+    let ratio_h :f32 = old_height  as f32 / (old_height/n)  as f32;
+
+    let mut res_image: Image = ImageBuffer::new(new_width, new_height);
+
+    let mut result_pixels: Vec<_> = res_image.par_chunks_exact_mut(4 as usize).collect();
+
+    let len = result_pixels.len();
+    let mid = len/2;
+    let (l,r) = result_pixels.split_at_mut(len/2);
+    rayon::join(|| pixelate_down(&ori_image,l, new_width, ratio_w, ratio_h,0),
+                 || pixelate_down(&ori_image, r, new_width, ratio_w, ratio_h,mid));
+
+    let mut upscaling_pixels: Vec<_> = ori_image.par_chunks_exact_mut(4 as usize).collect();
+
+
+    let (l,r) = upscaling_pixels.split_at_mut(mid);
+
+    rayon::join(|| pixelate_up(&res_image,l, old_width, ratio_w, ratio_h, 0),
+                 || pixelate_up(&res_image, r, old_width, ratio_w, ratio_h, mid));
+
+    let pixelate_format = format!("images/par_seqnew_{}.png", n);
+    let  _ = ori_image.save(pixelate_format);
 
 }
 
+pub fn par_pixelate2(filename: &String, n: u32) -> Result<(), Box<dyn std::error::Error>> {
+    let file_path = format!("images/{}", filename);
+    let img = ImageReader::open(file_path)?.decode()?;
+    let _ = resize2(&img, n);
+    Ok(())
+}
 
-pub fn par_pixelate(filename: &String, n: u32) -> Result<(), Box<dyn std::error::Error>> {
-
-    // break the image into resonable size
-    // pass to the resize function
-    // save the image
+pub fn par_pixelate3(filename: &String, n: u32) -> Result<(), Box<dyn std::error::Error>> {
 
     let file_path = format!("images/{}", filename);
     let img = ImageReader::open(file_path)?.decode()?;
-    let _ = resize(&img, n);
+
+    let _ = resize3(&img, n);
+
+    Ok(())
+}
+pub fn par_pixelate4(filename: &String, n: u32) -> Result<(), Box<dyn std::error::Error>> {
+
+    let file_path = format!("images/{}", filename);
+    let img = ImageReader::open(file_path)?.decode()?;
+    let _ = resize4(&img, n);
 
     Ok(())
 }
 
+
+// Normal running time: ((), 421.595084ms)
+// 1st parallel pixelate time: 450.271916ms
+// 2nd parallel pixelate time: 433.154458ms
+// 3rd parallel pixelate time: 314.355375ms
+// 5th parallel pixelate time: 312.147459ms
+
+// Normal running time: ((), 26.530666ms)
+// 1st parallel pixelate time: 10.849ms
+// 2nd parallel pixelate time: 10.917ms
+// 3rd parallel pixelate time: 5.13825ms
+// 5th parallel pixelate time: 5.530167ms

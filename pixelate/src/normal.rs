@@ -1,5 +1,5 @@
 use image::io::Reader as ImageReader;
-use image::{GenericImageView, DynamicImage, ImageBuffer, Rgba, GenericImage};
+use image::{DynamicImage, ImageBuffer, Rgba};
 
 struct Dimension {
     width: u32,
@@ -7,13 +7,6 @@ struct Dimension {
 }
 
 type Image = ImageBuffer<Rgba<u8>, Vec<u8>>;
-
-fn readImg (filename: &str) -> Result<DynamicImage, Box<dyn std::error::Error>> {
-    let file_path = format!("images/{}", filename);
-    let img = ImageReader::open(file_path)?.decode()?;
-    Ok(img)
-}
-
 
 fn resize (img: &DynamicImage, n :u32) {
 
@@ -63,18 +56,10 @@ fn resize (img: &DynamicImage, n :u32) {
 // fix the new dimension according to n
 
 pub fn norm_pixelate(filename: &String, n: u32) -> Result<(), Box<dyn std::error::Error>> {
-    let image = readImg(filename).unwrap();
-    let _ = resize(&image, n );
+    // let image = readImg(filename).unwrap();
+    let file_path = format!("images/{}", filename);
+    let img = ImageReader::open(file_path)?.decode()?;
+    let _ = resize(&img, n );
     Ok(())
 }
 
-// running time for normal pixelate (unoptimized)
-//     -  Normal running time n10: 2.373672458s
-//     -  Normal running time n50: 2.393025041s
-//     -  Normal running time n2: 2.375551542s
-// 
-
-// running time for normal pixelate (optimized)
-//     - Normal running time n10: 80.554333ms
-//     - Normal running time n50: 53.487792ms
-//     - Normal running time n2: 51.357458ms
